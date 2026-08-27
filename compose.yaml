@@ -1,0 +1,142 @@
+name: django-fastapi-learning
+
+services:
+  inventory-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: inventory_reference
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory-dev-password}
+    ports:
+      - "5433:5432"
+    volumes:
+      - inventory-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventory -d inventory_reference"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  inventory-api:
+    build:
+      context: .
+      dockerfile: reference/inventory-django/Dockerfile
+      target: runtime
+    environment:
+      POSTGRES_HOST: inventory-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: inventory_reference
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory-dev-password}
+      INVENTORY_API_KEY: ${INVENTORY_API_KEY:-dev-inventory-api-key}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-unsafe-development-only-secret}
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,inventory-api
+    command:
+      - sh
+      - -c
+      - python manage.py migrate --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --threads 4 --timeout 60
+    ports:
+      - "8001:8000"
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  inventory-tests:
+    profiles: ["app-tests"]
+    build:
+      context: .
+      dockerfile: reference/inventory-django/Dockerfile
+      target: test
+    environment:
+      POSTGRES_HOST: inventory-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: inventory_reference
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory-dev-password}
+      INVENTORY_API_KEY: ${INVENTORY_API_KEY:-dev-inventory-api-key}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-unsafe-development-only-secret}
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,inventory-tests
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+
+  appointments-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: appointments_reference
+      POSTGRES_USER: appointments
+      POSTGRES_PASSWORD: ${APPOINTMENTS_DB_PASSWORD:-appointments-dev-password}
+    ports:
+      - "5434:5432"
+    volumes:
+      - appointments-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appointments -d appointments_reference"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  appointments-api:
+    build:
+      context: .
+      dockerfile: reference/appointments-fastapi/Dockerfile
+      target: runtime
+    environment:
+      DATABASE_URL: postgresql+psycopg://appointments:${APPOINTMENTS_DB_PASSWORD:-appointments-dev-password}@appointments-db:5432/appointments_reference
+      APPOINTMENTS_API_KEY: ${APPOINTMENTS_API_KEY:-dev-appointments-api-key}
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    ports:
+      - "8002:8000"
+    depends_on:
+      appointments-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  appointments-tests:
+    profiles: ["app-tests"]
+    build:
+      context: .
+      dockerfile: reference/appointments-fastapi/Dockerfile
+      target: test
+    environment:
+      DATABASE_URL: postgresql+psycopg://appointments:${APPOINTMENTS_DB_PASSWORD:-appointments-dev-password}@appointments-db:5432/appointments_reference
+      APPOINTMENTS_API_KEY: ${APPOINTMENTS_API_KEY:-dev-appointments-api-key}
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && pytest -ra
+    depends_on:
+      appointments-db:
+        condition: service_healthy
+
+  contract-tests:
+    profiles: ["tests"]
+    build:
+      context: .
+      dockerfile: contract-tests/Dockerfile
+    environment:
+      INVENTORY_BASE_URL: http://inventory-api:8000
+      INVENTORY_API_KEY: ${INVENTORY_API_KEY:-dev-inventory-api-key}
+      APPOINTMENTS_BASE_URL: http://appointments-api:8000
+      APPOINTMENTS_API_KEY: ${APPOINTMENTS_API_KEY:-dev-appointments-api-key}
+    depends_on:
+      inventory-api:
+        condition: service_healthy
+      appointments-api:
+        condition: service_healthy
+
+volumes:
+  inventory-db-data:
+  appointments-db-data:

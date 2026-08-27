@@ -1,0 +1,24 @@
+[project]
+name = "appointments-fastapi"
+version = "0.1.0"
+description = "Reference Appointments API implemented with FastAPI and SQLAlchemy."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "alembic>=1.15,<2.0",
+    "email-validator>=2.2,<3.0",
+    "fastapi>=0.115,<1.0",
+    "psycopg[binary]>=3.2,<4.0",
+    "pydantic-settings>=2.8,<3.0",
+    "SQLAlchemy>=2.0,<3.0",
+    "tzdata>=2025.2",
+    "uvicorn[standard]>=0.34,<1.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28,<1.0",
+    "pytest>=8.3,<9.0",
+]
+
+[tool.uv]
+package = false

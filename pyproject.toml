@@ -1,0 +1,30 @@
+[project]
+name = "django-fastapi-learning"
+version = "0.1.0"
+description = "Learning lab for porting two PostgreSQL microservices between Django REST Framework and FastAPI."
+requires-python = ">=3.12,<3.14"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3,<5.0",
+    "ruff==0.13.2",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+    "reference/inventory-django",
+    "reference/appointments-fastapi",
+    "contract-tests",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "E501"]
