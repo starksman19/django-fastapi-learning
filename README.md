@@ -39,7 +39,9 @@ Szczegółowe opisy:
 - [Appointments — FastAPI i SQLAlchemy](reference/appointments-fastapi/README.md),
 - [zadanie: port Inventory do FastAPI](ports/inventory-fastapi/README.md),
 - [zadanie: port Appointments do Django](ports/appointments-django/README.md),
-- [połączenie z bazami PostgreSQL w DBeaver](additional-docs/db-connection.md).
+- [połączenie z bazami PostgreSQL w DBeaver](additional-docs/db-connection.md),
+- [uruchamianie aplikacji z PyCharma](additional-docs/pycharm-running-apps.md),
+- [ściąga z przydatnych komend Dockera](additional-docs/docker-command-cheatsheet.md).
 
 ## Zależności i jakość kodu
 
