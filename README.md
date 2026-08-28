@@ -41,7 +41,8 @@ Szczegółowe opisy:
 - [zadanie: port Appointments do Django](ports/appointments-django/README.md),
 - [połączenie z bazami PostgreSQL w DBeaver](additional-docs/db-connection.md),
 - [uruchamianie aplikacji z PyCharma](additional-docs/pycharm-running-apps.md),
-- [ściąga z przydatnych komend Dockera](additional-docs/docker-command-cheatsheet.md).
+- [ściąga z przydatnych komend Dockera](additional-docs/docker-command-cheatsheet.md),
+- [struktura Dockerfile i Docker Compose](additional-docs/dockerfile-compose-structure.md).
 
 ## Zależności i jakość kodu
 
