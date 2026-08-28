@@ -275,3 +275,453 @@ gwarantuje, że baza zakończyła inicjalizację.
 
 Więcej komend znajduje się w dokumencie
 [Ściąga z przydatnych komend Dockera](docker-command-cheatsheet.md).
+
+# Kompletne przykłady z komentarzami
+
+Poniższe przykłady odpowiadają plikom używanym w tym repozytorium. Komentarze
+zaczynające się od `#` są częścią przykładów edukacyjnych i można je pozostawić
+w plikach — Docker oraz Docker Compose je ignorują.
+
+Puste linie służą tylko do podziału pliku na czytelne sekcje.
+
+## Dockerfile aplikacji Django — instrukcja po instrukcji
+
+Oryginalny plik znajduje się w
+`reference/inventory-django/Dockerfile`.
+
+```dockerfile
+# Używa lekkiego obrazu z Pythonem 3.12 i nazywa pierwszy etap "runtime".
+FROM python:3.12-slim AS runtime
+
+# Kopiuje programy uv i uvx z oficjalnego obrazu uv do katalogu /bin.
+# Nie trzeba dzięki temu instalować uv przez pip.
+COPY --from=ghcr.io/astral-sh/uv:0.12.6 /uv /uvx /bin/
+
+# Nie zapisuje plików .pyc w kontenerze.
+# Wyłącza buforowanie stdout/stderr, aby logi pojawiały się od razu.
+# Nakazuje uv utworzyć środowisko w /opt/venv.
+# Dodaje programy z tego środowiska, np. gunicorn i pytest, do PATH.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
+
+# Ustawia główny katalog roboczy dla kolejnych instrukcji.
+WORKDIR /workspace
+
+# Tworzy systemową grupę i użytkownika app bez uprawnień administratora.
+RUN addgroup --system app && adduser --system --ingroup app app
+
+# Kopiuje główny pyproject.toml workspace'a i jego zablokowane wersje paczek.
+COPY pyproject.toml uv.lock ./
+
+# Kopiuje metadane wszystkich członków workspace'a.
+# uv potrzebuje ich do poprawnego odczytania wspólnego pliku uv.lock.
+COPY reference/inventory-django/pyproject.toml reference/inventory-django/pyproject.toml
+COPY reference/appointments-fastapi/pyproject.toml reference/appointments-fastapi/pyproject.toml
+COPY contract-tests/pyproject.toml contract-tests/pyproject.toml
+
+# Instaluje zależności produkcyjne aplikacji inventory-django.
+# --frozen zabrania zmiany uv.lock.
+# --no-dev pomija zależności developerskie, takie jak pytest.
+# --package wybiera jeden projekt z workspace'a.
+# --no-install-workspace instaluje zależności przed skopiowaniem kodu aplikacji.
+# --compile-bytecode kompiluje kod zależności do bytecode podczas budowania.
+RUN uv sync \
+    --frozen \
+    --no-dev \
+    --package inventory-django \
+    --no-install-workspace \
+    --compile-bytecode
+
+# Kopiuje kod Django do obrazu po zainstalowaniu zależności.
+COPY reference/inventory-django reference/inventory-django
+
+# Przekazuje użytkownikowi app prawa do katalogu aplikacji.
+RUN chown -R app:app /workspace/reference/inventory-django
+
+# Od tej chwili polecenia są wykonywane w katalogu projektu Django.
+WORKDIR /workspace/reference/inventory-django
+
+# Proces aplikacji nie będzie działał jako root.
+USER app
+
+# Dokumentuje, że aplikacja nasłuchuje w kontenerze na porcie 8000.
+EXPOSE 8000
+
+# Domyślne polecenie uruchamiające Django przez serwer Gunicorn.
+# config.wsgi:application wskazuje obiekt WSGI Django.
+# 0.0.0.0 pozwala przyjmować połączenia spoza kontenera.
+# Pozostałe parametry konfigurują procesy, wątki i timeout.
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--threads", "4", "--timeout", "60"]
+
+# Rozpoczyna etap testowy, dziedziczący wszystko z etapu runtime.
+FROM runtime AS test
+
+# Tymczasowo wraca do roota, aby zmodyfikować środowisko /opt/venv.
+USER root
+
+# Ponownie synchronizuje paczki, ale bez --no-dev.
+# Dzięki temu etap testowy otrzymuje pytest i pytest-django.
+RUN uv sync \
+    --frozen \
+    --package inventory-django \
+    --no-install-workspace \
+    --compile-bytecode
+
+# Testy również są uruchamiane jako użytkownik bez uprawnień administratora.
+USER app
+
+# Domyślnym poleceniem etapu testowego jest uruchomienie testów.
+# -ra pokazuje krótkie podsumowanie testów pominiętych i nieudanych.
+CMD ["pytest", "-ra"]
+```
+
+Compose buduje etap `runtime` dla działającego API oraz etap `test` dla usługi
+`inventory-tests`. Dzięki temu obraz produkcyjny nie zawiera narzędzi testowych.
+
+## Dockerfile aplikacji FastAPI — instrukcja po instrukcji
+
+Oryginalny plik znajduje się w
+`reference/appointments-fastapi/Dockerfile`.
+
+```dockerfile
+# Rozpoczyna produkcyjny etap runtime na bazie lekkiego obrazu Pythona 3.12.
+FROM python:3.12-slim AS runtime
+
+# Pobiera gotowe programy uv i uvx z oficjalnego obrazu Astral.
+COPY --from=ghcr.io/astral-sh/uv:0.12.6 /uv /uvx /bin/
+
+# Wyłącza pliki .pyc, włącza natychmiastowe logi i konfiguruje środowisko uv.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
+
+# Ustawia katalog roboczy workspace'a.
+WORKDIR /workspace
+
+# Tworzy użytkownika app, aby API nie działało jako root.
+RUN addgroup --system app && adduser --system --ingroup app app
+
+# Kopiuje konfigurację głównego workspace'a i lockfile.
+COPY pyproject.toml uv.lock ./
+
+# Kopiuje pliki pyproject członków workspace'a wymagane do odczytania uv.lock.
+COPY reference/inventory-django/pyproject.toml reference/inventory-django/pyproject.toml
+COPY reference/appointments-fastapi/pyproject.toml reference/appointments-fastapi/pyproject.toml
+COPY contract-tests/pyproject.toml contract-tests/pyproject.toml
+
+# Instaluje wyłącznie produkcyjne zależności projektu appointments-fastapi.
+# Znaczenie flag jest takie samo jak w Dockerfile Django.
+RUN uv sync \
+    --frozen \
+    --no-dev \
+    --package appointments-fastapi \
+    --no-install-workspace \
+    --compile-bytecode
+
+# Kopiuje kod FastAPI i migracje Alembic do obrazu.
+COPY reference/appointments-fastapi reference/appointments-fastapi
+
+# Nadaje użytkownikowi app prawa do katalogu projektu.
+RUN chown -R app:app /workspace/reference/appointments-fastapi
+
+# Ustawia katalog FastAPI jako bieżący katalog procesu.
+WORKDIR /workspace/reference/appointments-fastapi
+
+# Przełącza wykonywanie na użytkownika bez uprawnień administratora.
+USER app
+
+# Dokumentuje wewnętrzny port aplikacji.
+EXPOSE 8000
+
+# Uruchamia obiekt app z modułu app.main przez serwer Uvicorn.
+# Serwer nasłuchuje na wszystkich interfejsach kontenera i używa dwóch workerów.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+
+# Tworzy wariant testowy na podstawie kompletnego etapu runtime.
+FROM runtime AS test
+
+# Root jest potrzebny jedynie do zmiany zawartości środowiska /opt/venv.
+USER root
+
+# Instaluje także grupę dev, zawierającą pytest i httpx.
+RUN uv sync \
+    --frozen \
+    --package appointments-fastapi \
+    --no-install-workspace \
+    --compile-bytecode
+
+# Testy nie wymagają działania jako root.
+USER app
+
+# Ustawia pytest jako domyślne polecenie obrazu testowego.
+CMD ["pytest", "-ra"]
+```
+
+Dockerfile FastAPI ma tę samą konstrukcję co Dockerfile Django. Różnią się
+wybieranym pakietem, kopiowanym katalogiem i poleceniem uruchamiającym serwer.
+
+## Docker Compose — sekcja po sekcji i linia po linii
+
+Poniżej znajduje się komentowany odpowiednik głównego `compose.yaml`. Wcięcia
+są częścią składni YAML: element wcięty należy do elementu znajdującego się nad
+nim.
+
+```yaml
+# Ustawia nazwę całego projektu Compose.
+name: django-fastapi-learning
+
+# Rozpoczyna słownik wszystkich usług, z których powstaną kontenery.
+services:
+  # Definiuje usługę pierwszej bazy PostgreSQL.
+  inventory-db:
+    # Używa gotowego obrazu postgres z tagiem 16-alpine.
+    image: postgres:16-alpine
+
+    # Przekazuje zmienne do skryptu startowego obrazu PostgreSQL.
+    environment:
+      # Tworzy bazę o tej nazwie przy pierwszym uruchomieniu pustego wolumenu.
+      POSTGRES_DB: inventory_reference
+      # Tworzy użytkownika bazy.
+      POSTGRES_USER: inventory
+      # Czyta hasło z .env, a po jego braku używa wartości developerskiej.
+      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory-dev-password}
+
+    # Udostępnia port 5432 kontenera jako port 5433 na Windowsie.
+    ports:
+      - "5433:5432"
+
+    # Montuje nazwany wolumen w katalogu danych PostgreSQL.
+    volumes:
+      - inventory-db-data:/var/lib/postgresql/data
+
+    # Określa sposób sprawdzania gotowości bazy.
+    healthcheck:
+      # pg_isready sprawdza, czy PostgreSQL przyjmuje połączenia.
+      # CMD-SHELL pozwala wykonać polecenie przez powłokę kontenera.
+      test: ["CMD-SHELL", "pg_isready -U inventory -d inventory_reference"]
+      # Kolejne próby są wykonywane co 3 sekundy.
+      interval: 3s
+      # Jedna próba może trwać maksymalnie 3 sekundy.
+      timeout: 3s
+      # Po 20 nieudanych próbach kontener otrzyma stan unhealthy.
+      retries: 20
+
+  # Definiuje usługę API Inventory napisanego w Django.
+  inventory-api:
+    # Zamiast gotowego image Compose zbuduje nasz obraz.
+    build:
+      # Kontekstem budowania jest katalog główny repozytorium.
+      context: .
+      # Wskazuje Dockerfile Django względem kontekstu.
+      dockerfile: reference/inventory-django/Dockerfile
+      # Buduje produkcyjny etap runtime, bez pytest.
+      target: runtime
+
+    # Przekazuje konfigurację do settings.py Django.
+    environment:
+      # inventory-db jest nazwą hosta bazy w sieci Compose.
+      POSTGRES_HOST: inventory-db
+      # Kontenery łączą się przez wewnętrzny port PostgreSQL.
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: inventory_reference
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory-dev-password}
+      INVENTORY_API_KEY: ${INVENTORY_API_KEY:-dev-inventory-api-key}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-unsafe-development-only-secret}
+      # Django akceptuje żądania wysłane pod tymi nazwami hostów.
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,inventory-api
+
+    # Nadpisuje CMD z Dockerfile dla kontenera uruchamianego przez Compose.
+    command:
+      # Uruchamia powłokę sh.
+      - sh
+      # Przekazuje powłoce następną wartość jako tekst polecenia.
+      - -c
+      # Najpierw wykonuje migracje, a po sukcesie uruchamia Gunicorn.
+      - python manage.py migrate --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --threads 4 --timeout 60
+
+    # Udostępnia Django na Windowsie pod localhost:8001.
+    ports:
+      - "8001:8000"
+
+    # Nie uruchamia API, dopóki inventory-db nie będzie healthy.
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+
+    # Sprawdza endpoint zdrowia Django wewnątrz kontenera.
+    healthcheck:
+      # CMD uruchamia program bez dodatkowej powłoki.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Definiuje jednorazową usługę uruchamiającą testy Django.
+  inventory-tests:
+    # Usługa nie uruchamia się przy zwykłym docker compose up.
+    profiles: ["app-tests"]
+
+    # Buduje ten sam Dockerfile, ale wybiera etap test.
+    build:
+      context: .
+      dockerfile: reference/inventory-django/Dockerfile
+      target: test
+
+    # Testy otrzymują oddzielny zestaw zmiennych środowiskowych.
+    environment:
+      POSTGRES_HOST: inventory-db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: inventory_reference
+      POSTGRES_USER: inventory
+      POSTGRES_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory-dev-password}
+      INVENTORY_API_KEY: ${INVENTORY_API_KEY:-dev-inventory-api-key}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-unsafe-development-only-secret}
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,inventory-tests
+
+    # Testy czekają na gotową bazę.
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+
+    # Brak command oznacza użycie CMD ["pytest", "-ra"] z etapu test.
+
+  # Definiuje drugą, niezależną bazę PostgreSQL.
+  appointments-db:
+    # Obie bazy używają tego samego gotowego obrazu.
+    image: postgres:16-alpine
+
+    # Inne wartości tworzą inną bazę i innego użytkownika.
+    environment:
+      POSTGRES_DB: appointments_reference
+      POSTGRES_USER: appointments
+      POSTGRES_PASSWORD: ${APPOINTMENTS_DB_PASSWORD:-appointments-dev-password}
+
+    # Port 5434 hosta nie koliduje z portem pierwszej bazy.
+    ports:
+      - "5434:5432"
+
+    # Drugi wolumen całkowicie oddziela dane obu baz.
+    volumes:
+      - appointments-db-data:/var/lib/postgresql/data
+
+    # Sprawdza gotowość bazy Appointments.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appointments -d appointments_reference"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Definiuje API Appointments napisane w FastAPI.
+  appointments-api:
+    # Buduje produkcyjny etap Dockerfile FastAPI.
+    build:
+      context: .
+      dockerfile: reference/appointments-fastapi/Dockerfile
+      target: runtime
+
+    # Przekazuje URL połączenia SQLAlchemy i klucz API.
+    environment:
+      # appointments-db jest nazwą hosta, a 5432 portem wewnętrznym bazy.
+      DATABASE_URL: postgresql+psycopg://appointments:${APPOINTMENTS_DB_PASSWORD:-appointments-dev-password}@appointments-db:5432/appointments_reference
+      APPOINTMENTS_API_KEY: ${APPOINTMENTS_API_KEY:-dev-appointments-api-key}
+
+    # Nadpisuje CMD z Dockerfile.
+    command:
+      - sh
+      - -c
+      # Najpierw aktualizuje bazę przez Alembic, potem uruchamia Uvicorn.
+      - alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+
+    # Udostępnia FastAPI na Windowsie pod localhost:8002.
+    ports:
+      - "8002:8000"
+
+    # Czeka na zdrową bazę Appointments.
+    depends_on:
+      appointments-db:
+        condition: service_healthy
+
+    # Odpytuje endpoint zdrowia FastAPI.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # Definiuje jednorazową usługę testów FastAPI.
+  appointments-tests:
+    # Wymaga jawnego włączenia profilu app-tests.
+    profiles: ["app-tests"]
+
+    # Buduje etap zawierający pytest i httpx.
+    build:
+      context: .
+      dockerfile: reference/appointments-fastapi/Dockerfile
+      target: test
+
+    # Testy łączą się z bazą Appointments przez sieć Compose.
+    environment:
+      DATABASE_URL: postgresql+psycopg://appointments:${APPOINTMENTS_DB_PASSWORD:-appointments-dev-password}@appointments-db:5432/appointments_reference
+      APPOINTMENTS_API_KEY: ${APPOINTMENTS_API_KEY:-dev-appointments-api-key}
+
+    # Nadpisuje CMD testowego Dockerfile, aby przed pytest wykonać migracje.
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && pytest -ra
+
+    # Uruchamia testy dopiero po przygotowaniu bazy.
+    depends_on:
+      appointments-db:
+        condition: service_healthy
+
+  # Definiuje testy kontraktowe wysyłające prawdziwe żądania HTTP do obu API.
+  contract-tests:
+    # Wymaga jawnego profilu tests.
+    profiles: ["tests"]
+
+    # Buduje osobny obraz z katalogu contract-tests.
+    build:
+      context: .
+      dockerfile: contract-tests/Dockerfile
+
+    # Przekazuje adresy obu usług widoczne w wewnętrznej sieci Compose.
+    environment:
+      INVENTORY_BASE_URL: http://inventory-api:8000
+      INVENTORY_API_KEY: ${INVENTORY_API_KEY:-dev-inventory-api-key}
+      APPOINTMENTS_BASE_URL: http://appointments-api:8000
+      APPOINTMENTS_API_KEY: ${APPOINTMENTS_API_KEY:-dev-appointments-api-key}
+
+    # Testy kontraktowe czekają, aż oba API przejdą healthcheck.
+    depends_on:
+      inventory-api:
+        condition: service_healthy
+      appointments-api:
+        condition: service_healthy
+
+# Deklaruje nazwane wolumeny użyte wcześniej przez usługi baz danych.
+volumes:
+  # Przechowuje pliki bazy Inventory niezależnie od kontenera.
+  inventory-db-data:
+  # Przechowuje pliki bazy Appointments niezależnie od kontenera.
+  appointments-db-data:
+```
+
+## Jak czytać zależności całego zestawu
+
+```text
+inventory-db ────────→ inventory-api ────────┐
+      └──────────────→ inventory-tests        │
+                                              ├──→ contract-tests
+appointments-db ─────→ appointments-api ─────┘
+      └──────────────→ appointments-tests
+```
+
+Strzałka oznacza, że usługa po prawej potrzebuje zdrowej usługi po lewej.
+Zwykłe `docker compose up` uruchamia bazy i API. Usługi testowe są przypisane do
+profili, dlatego uruchamia się je osobnymi komendami opisanymi w ściądze z
+komend Dockera.
